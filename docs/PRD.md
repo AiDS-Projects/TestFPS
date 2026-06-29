@@ -2,4 +2,4 @@
 
 **复杂度**: medium
 
-创建一个具备 AI 控制能力的 NPC 角色，包含 C++ 基类、蓝图资产和行为树配置。项目当前为基础模板，无现有角色或 AI 系统，需要从 C++ 类到蓝图到 AI 行为逐层构建。
+为TestFPS项目创建一个具有AI行为能力的NPC角色。包含C++基础类（ANpcCharacter、ANpcAIController），蓝图派生资产（BP_NpcCharacter），以及基于StateTree的AI行为配置，实现NPC在关卡中的自主巡逻/待机能力。

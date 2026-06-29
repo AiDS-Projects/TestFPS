@@ -304,3 +304,15 @@ TestFPS.uproject is has no code, but is being treated as a code-based project fo
 Using 'git status' to determine working set for adaptive non-unity build (F:\ADS_Projects\TestFPS).
 Creating makefile for UnrealEditor (no existing makefile)
 Expecting to find a type to be declared in a module rules named 'TestFPS' in 'TestFPSModuleRules, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null'.  This type must derive from the 'ModuleRules' type defined by UnrealBuildTool.
+
+Result: Failed (RulesError)
+Total execution time: 59.61 seconds
+LogInit: Warning: Still incompatible or missing module: TestFPS
+LogCore: Engine exit requested (reason: EngineExit() was called)
+LogAudio: Display: Beginning Audio Device Manager Shutdown (Module: )...
+LogAudio: Display: Audio Device Manager Shutdown
+LogExit: Preparing to exit.
+LogXGEController: Cannot use XGE Controller as Incredibuild is not installed on this machine.
+LogPakFile: Destroying PakPlatformFile
+LogExit: Exiting.
+Log file closed, 06/29/26 10:12:50
