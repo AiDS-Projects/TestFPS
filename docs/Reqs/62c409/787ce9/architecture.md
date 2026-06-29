@@ -1,27 +1,34 @@
 # 架构设计 - 创建 C++ NPC 角色类
 
 ## 架构模式
-Incremental — single new C++ class (ANPCCharacter) extending ACharacter with perception and attribute systems. No existing code to refactor; project is a blank UE5.7 template.
+incremental
 
 ## 技术栈
 
 - **engine**: Unreal Engine 5.7
-- **language**: C++ (UE5 C++ conventions: UCLASS/USTRUCT/UPROPERTY/UFUNCTION macros)
-- **build_system**: UnrealBuildTool (ModuleRules .Build.cs)
-- **modules_added**: AIModule, NavigationSystem
-- **plugins_enabled**: EnhancedInput, StateTree, GameplayStateTree
-- **target_platform**: Win64 (Development / Editor)
+- **language**: C++
+- **template_base**: TP_Blank
+- **build_system**: UnrealBuildTool
+- **plugins**: EnhancedInput, StateTree, GameplayStateTree
+- **existing_modules**: TestFPS (module class: TP_Blank)
+- **new_dependencies**: AIModule, UMG
 
 ## 模块设计
 
 ### 
 职责: 
 
+### 
+职责: 
+
+### 
+职责: 
+
 ## 关键决策
-- ETeam as standalone header (ETeam.h) rather than nested in NPCCharacter.h — allows reuse by future AIController, GameMode, weapon system without header coupling.
-- AIModule added as PublicDependencyModuleNames (not Private) — AIPerceptionComponent is exposed in public header via UPROPERTY, so consumers need the module symbols.
-- Die() separated from OnDeath() — Die() handles state machine (ragdoll, collision, timer), OnDeath is BlueprintNativeEvent for designer override (VFX/sound). Prevents Blueprint from accidentally skipping critical C++ cleanup.
-- Armor absorbs damage before health (not as damage multiplier/reduction) — matches PRD spec and is the simplest damage pipeline; avoids introducing damage formula complexity in base class.
-- Perception config values hardcoded in constructor defaults (not .ini) — matches UE best practice of defining component defaults in C++ constructor; designers can override per-instance in Blueprint/Details panel.
-- No AIController created in this scope — PRD explicitly excludes it. AIPerceptionComponent is attached directly to ANPCCharacter (valid UE pattern; future AIController can reference it).
-- DeathDestroyDelay default 10.0f seconds — matches prototype and PRD spec, gives enough time for death animation/ragdoll to play before cleanup.
+- {'decision': 'Inherit ANPCCharacter from ACharacter rather than APawn', 'reason': 'ACharacter provides built-in CapsuleComponent, CharacterMovementComponent, and SkeletalMeshComponent — all necessary for an NPC that can walk and receive damage. Prototype WalkSpeed maps directly to UCharacterMovementComponent::MaxWalkSpeed.', 'tradeoff': 'Slightly heavier than bare APawn, but eliminates boilerplate component setup.'}
+- {'decision': 'IsAlive is a derived getter (BlueprintCallable), not a stored UPROPERTY', 'reason': 'Prototype pseudo-code shows IsAlive as a function of CurrentHP. Avoids desync bugs where IsAlive != (CurrentHP > 0). Matches Engine pattern (AActor::IsPendingKill).', 'tradeoff': 'Slightly more CPU per query (trivial float compare), eliminates state synchronization bug class.'}
+- {'decision': 'Use UAIPerceptionComponent with sight sense only (no hearing/damage sense yet)', 'reason': "Prototype specifies SightRadius=1500cm and LoseSightRadius=1600cm. These are the minimum for 'can AIControl' requirement. Additional senses can be added incrementally without breaking existing config.", 'tradeoff': 'Less awareness than full AI, but simpler to test and validate the core loop first.'}
+- {'decision': 'Health bar uses UWidgetComponent with a separate BP_WBP_HealthBar widget (created in Content)', 'reason': 'Decouples C++ logic from visual design. Blueprint designer can iterate the widget independently. UWidgetComponent::SetWidget() links at BeginPlay.', 'tradeoff': "Requires a corresponding Blueprint widget asset to be created. Health bar will show 'missing widget' placeholder until that asset exists."}
+- {'decision': 'OnDeathDelegate is BlueprintAssignable multicast delegate, not C++ virtual method override only', 'reason': "Maps to prototype's OnDeath() behavior. Allows Blueprint-level reactions (VFX, audio, quest triggers, loot spawning) without subclassing C++. Matches UE event-driven pattern.", 'tradeoff': 'Dynamic multicast has slight overhead vs direct virtual call, acceptable for infrequent event (once per NPC lifetime).'}
+- {'decision': 'Add AIModule and UMG to Build.cs PublicDependencyModuleNames', 'reason': 'Public because ANPCCharacter.h includes UAIPerceptionComponent and UWidgetComponent types. These are standard UE modules available without extra plugin enablement.', 'tradeoff': 'Marginally increases module dependency footprint. Both modules are core UE and always loaded, so no runtime cost.'}
+- {'decision': 'Dedicated LogNPC log category (DEFINE_LOG_CATEGORY_STATIC) instead of LogTemp', 'reason': 'Per UE C++ coding standard: LogTemp is forbidden for production code. LogNPC allows filtering NPC-specific logs in Output Log.', 'tradeoff': 'Trivial additional line in .cpp, zero runtime cost.'}
