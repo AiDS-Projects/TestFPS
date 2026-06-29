@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NPC Character Prototype — ANPCCharacter 核心循环验证</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: monospace; display: flex; height: 100vh; align-items: center; justify-content: center; }
+  #app { display: flex; gap: 20px; align-items: flex-start; }
+  canvas { border: 1px solid #333; background: #16213e; cursor: crosshair; }
+  #panel { background: #0f3460; padding: 20px; border-radius: 8px; width: 260px; }
+  #panel h2 { font-size: 14px; color: #e94560; margin-bottom: 12px; }
+  .stat { margin: 6px 0; font-size: 13px; }
+  .stat span { color: #f0a500; }
+  button { display: block; width: 100%; margin: 8px 0; padding: 8px; border: none; border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 13px; font-weight: bold; }
+  button:hover { filter: brightness(1.2); }
+  #btn-damage { background: #e94560; color: white; }
+  #btn-reset { background: #0f3460; color: #e0e0e0; border: 1px solid #e94560; }
+  #btn-damage:disabled, #btn-reset:disabled { opacity: 0.4; cursor: not-allowed; }
+  .dead { color: #e94560; font-weight: bold; }
+  .alive { color: #4ecca3; font-weight: bold; }
+  #hint { margin-top: 12px; font-size: 11px; color: #888; line-height: 1.6; }
+  #log { margin-top: 12px; max-height: 120px; overflow-y: auto; font-size: 11px; color: #aaa; line-height: 1.5; }
+  #log .entry { border-left: 2px solid #333; padding-left: 6px; margin: 3px 0; }
+  #log .entry.damage { border-left-color: #e94560; color: #e94560; }
+  #log .entry.death { border-left-color: #ff6b6b; color: #ff6b6b; font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="c" width="700" height="500"></canvas>
+  <div id="panel">
+    <h2>NPC Character Stats</h2>
+    <div class="stat">MaxHP: <span id="maxhp">100</span></div>
+    <div class="stat">CurrentHP: <span id="curhp">100</span></div>
+    <div class="stat">WalkSpeed: <span>400 cm/s</span></div>
+    <div class="stat">IsAlive: <span id="isalive" class="alive">TRUE</span></div>
+    <div class="stat">Perception: <span>1500 cm</span></div>
+    <div class="stat">HealthBarOffset: <span>Z=120 cm</span></div>
+    <button id="btn-damage" onclick="dealDamage(30)">⚔ Take 30 Damage</button>
+    <button id="btn-damage-big" onclick="dealDamage(100)" style="background:#c0392b;">💀 Take 100 Damage</button>
+    <button id="btn-reset" onclick="resetNPC()">🔄 Reset NPC</button>
+    <div id="log"></div>
+    <div id="hint">
+      🖱 Click NPC to deal 15 damage<br>
+      ⌨ WASD/Arrow keys to move<br>
+      ⭕ Circle = Visual Perception<br>
+      📊 Bar above = HealthBar (Z=120)
+    </div>
+  </div>
+</div>
+
+<script>
+// ==================== ANPCCharacter 原型 ====================
+// 模拟 C++ ANPCCharacter 类的核心属性与行为
+// 所有属性对应 PRD 中 BlueprintReadWrite 暴露项
+
+const NPC = {
+  // 基础生命属性
+  MaxHP: 100,
+  CurrentHP: 100,
+  WalkSpeed: 400,       // cm/s — CharacterMovementComponent::MaxWalkSpeed
+
+  // 视觉感知配置
+  SightRadius: 1500,    // cm — UAIPerceptionComponent 视觉半径
+  LoseSightRadius: 1600, // cm — 失去视觉半径
+
+  // 血条属性
+  ShowHealthBar: true,
+  HealthBarZOffset: 120, // cm — 血条 Z 轴偏移
+
+  // 运行时状态
+  IsAlive: true,
+  OnDeathCalled: false,
+  Position: { x: 350, y: 250 },
+
+  // 缓存日志（最多 8 条）
+  Log: [],
+
+  // ---- 核心逻辑 ----
+
+  /** TakeDamage(float Damage, AActor* Instigator, FDamageEvent) */
+  TakeDamage: function(damage, instigator) {
+    if (!this.IsAlive) {
+      this.AddLog('TakeDamage ignored — NPC already dead', '');
+      return;
+    }
+
+    const oldHP = this.CurrentHP;
+    this.CurrentHP = Math.max(0, this.CurrentHP - damage);
+    this.IsAlive = (this.CurrentHP > 0); // 每次 HP 变化时更新
+
+    this.AddLog(
+      `${instigator} dealt ${damage} dmg → HP ${oldHP}→${this.CurrentHP}`,
+      'damage'
+    );
+
+    // 当 CurrentHP ≤ 0 时自动触发 OnDeath（1 帧内）
+    if (this.CurrentHP <= 0 && !this.OnDeathCalled) {
+      this.OnDeath();
+    }
+  },
+
+  /** OnDeath() — 由 TakeDamage 在 HP ≤ 0 时自动调用 */
+  OnDeath: function() {
+    this.OnDeathCalled = true;
+    this.IsAlive = false;
+    this.AddLog('>> OnDeath() triggered — NPC killed <<', 'death');
+  },
+
+  /** 记录最近 N 条事件日志 */
+  AddLog: function(msg, type) {
+    this.Log.unshift({ msg, type, time: Date.now() });
+    if (this.Log.length > 8) this.Log.length = 8;
+  },
+
+  /** 完全重置为默认构造状态 */
+  Reset: function() {
+    this.CurrentHP = this.MaxHP;
+    this.IsAlive = true;
+    this.OnDeathCalled = false;
+    this.Position = { x: 350, y: 250 };
+    this.Log = [];
+    this.AddLog('NPC reset to defaults', '');
+  }
+};
+
+// ==================== 渲染与输入处理 ====================
+// 缩放因子：1 米 = 50 像素，将 UE cm 映射到 Canvas 像素
+
+const SCALE = 0.5; // 1cm = 0.5px（原型视口适配）
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const px = NPC.Position.x;
+  const py = NPC.Position.y;
+  const sightR = NPC.SightRadius * SCALE;   // 1500 → 750px
+  const barZ = NPC.HealthBarZOffset * SCALE; // 120 → 60px
+
+  // --- 视觉感知圈（虚线圆） ---
+  ctx.save();
+  ctx.setLineDash([8, 6]);
+  ctx.strokeStyle = NPC.IsAlive ? 'rgba(255, 255, 0, 0.25)' : 'rgba(100, 100, 100, 0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(px, py, sightR, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // 感知圈标签
+  ctx.fillStyle = '#fff8';
+  ctx.font = '10px monospace';
+  ctx.fillText('SightRadius=' + NPC.SightRadius + 'cm', px - sightR, py - sightR - 6);
+
+  // --- NPC 实体（圆形） ---
+  ctx.fillStyle = NPC.IsAlive ? '#4ecca3' : '#555';
+  ctx.beginPath();
+  ctx.arc(px, py, 20, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = NPC.IsAlive ? '#2ecc71' : '#333';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // NPC 标签
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('ANPCCharacter', px, py + 38);
+
+  // --- 血条（Z 轴偏移上方） ---
+  if (NPC.ShowHealthBar) {
+    const barW = 80;
+    const barH = 10;
+    const bx = px - barW / 2;
+    const by = py - barZ - barH; // Z=120 偏移 → 60px 上方
+
+    // 背景
+    ctx.fillStyle = '#333';
+    ctx.fillRect(bx, by, barW, barH);
+
+    // 血量填充
+    const ratio = NPC.CurrentHP / NPC.MaxHP;
+    const fillColor = ratio > 0.5 ? '#4ecca3' : (ratio > 0.25 ? '#f0a500' : '#e94560');
+    ctx.fillStyle = fillColor;
+    ctx.fillRect(bx, by, barW * ratio, barH);
+
+    // 边框
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, barW, barH);
+
+    // HP 数字
+    ctx.fillStyle = '#fff';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(Math.floor(NPC.CurrentHP) + '/' + NPC.MaxHP, px, by - 2);
+  }
+
+  ctx.textAlign = 'start';
+
+  // --- 死亡标记 ---
+  if (!NPC.IsAlive) {
+    ctx.save();
+    ctx.font = 'bold 24px monospace';
+    ctx.fillStyle = '#e94560aa';
+    ctx.textAlign = 'center';
+    ctx.fillText('X  DEAD', px, py + 60);
+    ctx.restore();
+  }
+}
+
+// ==================== UI 面板更新 ====================
+
+function updateUI() {
+  document.getElementById('curhp').textContent = NPC.CurrentHP;
+  document.getElementById('maxhp').textContent = NPC.MaxHP;
+  const aliveEl = document.getElementById('isalive');
+  aliveEl.textContent = NPC.IsAlive ? 'TRUE' : 'FALSE';
+  aliveEl.className = NPC.IsAlive ? 'alive' : 'dead';
+
+  // 伤害按钮状态
+  const btnDmg = document.getElementById('btn-damage');
+  const btnDmgBig = document.getElementById('btn-damage-big');
+  btnDmg.disabled = !NPC.IsAlive;
+  btnDmgBig.disabled = !NPC.IsAlive;
+
+  // 日志面板
+  const logEl = document.getElementById('log');
+  logEl.innerHTML = NPC.Log
+    .map(e => `<div class="entry ${e.type}">${e.msg}</div>`)
+    .join('');
+}
+
+// ==================== 输入处理 ====================
+
+function dealDamage(amount) {
+  NPC.TakeDamage(amount, 'Player');
+  updateUI();
+  render();
+}
+
+function resetNPC() {
+  NPC.Reset();
+  updateUI();
+  render();
+}
+
+// 键盘移动：WASD 或方向键，速度 = WalkSpeed * SCALE / 60 (per frame ~60fps)
+const MOVE_STEP = NPC.WalkSpeed * SCALE / 60; // ~3.3 px/frame
+
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+function processInput() {
+  if (!NPC.IsAlive) return; // 死亡后不可移动
+
+  const h = (keys['arrowright'] || keys['d'] ? 1 : 0) - (keys['arrowleft'] || keys['a'] ? 1 : 0);
+  const v = (keys['arrowdown'] || keys['s'] ? 1 : 0) - (keys['arrowup'] || keys['w'] ? 1 : 0);
+
+  if (h !== 0 || v !== 0) {
+    const len = Math.sqrt(h * h + v * v);
+    NPC.Position.x += (h / len) * MOVE_STEP;
+    NPC.Position.y += (v / len) * MOVE_STEP;
+
+    // 边界钳制
+    NPC.Position.x = Math.max(30, Math.min(canvas.width - 30, NPC.Position.x));
+    NPC.Position.y = Math.max(30, Math.min(canvas.height - 30, NPC.Position.y));
+  }
+}
+
+// Canvas 点击：点击 NPC 圆形区域造成 15 点伤害
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const dx = mx - NPC.Position.x;
+  const dy = my - NPC.Position.y;
+
+  if (Math.sqrt(dx * dx + dy * dy) <= 20) {
+    dealDamage(15);
+  }
+});
+
+// ==================== 游戏循环 ====================
+
+function gameLoop() {
+  processInput();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ==================== 启动 ====================
+
+updateUI();
+render();
+gameLoop();
+</script>
+</body>
+</html>

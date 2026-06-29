@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NPC Character Prototype — Core Loop Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #eee; font-family: monospace; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+  h1 { margin: 16px 0 4px; font-size: 18px; }
+  .subtitle { font-size: 12px; color: #888; margin-bottom: 12px; }
+  canvas { border: 1px solid #333; background: #16213e; cursor: crosshair; }
+  .controls { margin: 12px 0; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  button { padding: 6px 14px; border: 1px solid #555; background: #0f3460; color: #eee; cursor: pointer; font-family: monospace; font-size: 13px; border-radius: 3px; }
+  button:hover { background: #1a4a8a; }
+  button.danger { background: #600; border-color: #a00; }
+  button.danger:hover { background: #800; }
+  .stats { display: flex; gap: 24px; margin: 0 0 12px; font-size: 13px; flex-wrap: wrap; justify-content: center; }
+  .stat { padding: 6px 12px; background: #0f3460; border-radius: 3px; }
+  .stat span { color: #4fc3f7; font-weight: bold; }
+  .legend { font-size: 11px; color: #666; margin-bottom: 8px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>ANPCCharacter — Core Loop Prototype</h1>
+<div class="subtitle">点击地图移动 | 数字键 1-5 造成伤害 | R 键复活</div>
+
+<div class="stats">
+  <div class="stat">CurrentHP: <span id="chp">100</span></div>
+  <div class="stat">MaxHP: <span id="mhp">100</span></div>
+  <div class="stat">WalkSpeed: <span id="spd">400</span></div>
+  <div class="stat">IsAlive: <span id="alive">true</span></div>
+  <div class="stat">PerceptionR: <span id="percR">1500</span></div>
+  <div class="stat">HealthBarZ: <span id="hbZ">120</span></div>
+</div>
+
+<canvas id="game" width="800" height="500"></canvas>
+
+<div class="legend">
+  🔴 红色圆 = 视觉感知范围 | 🟢 绿色条 = 生命值 | □ 灰色框 = NPC | ✚ 十字准星 = 目标移动点
+</div>
+
+<div class="controls">
+  <button onclick="dealDamage(10)">Damage 10</button>
+  <button onclick="dealDamage(25)">Damage 25</button>
+  <button onclick="dealDamage(50)">Damage 50</button>
+  <button onclick="dealDamage(100)">Damage 100</button>
+  <button class="danger" onclick="dealDamage(999)">Instant Kill</button>
+  <button onclick="resetNPC()">Reset NPC</button>
+</div>
+
+<script>
+// ===== ANPCCharacter 核心数据 =====
+const SCALE = 0.15; // 将 cm 映射到像素 (1500cm → 225px 合理显示)
+
+const npc = {
+  // 位置 (画布坐标)
+  x: 400, y: 250,
+
+  // 基础生命属性
+  CurrentHP: 100,
+  MaxHP: 100,
+  IsAlive: true,
+
+  // 移动速度 (cm/s)
+  WalkSpeed: 400,
+
+  // 感知组件配置
+  SightRadius: 1500,      // cm, 视觉感知半径
+  LoseSightRadius: 1600,  // cm, 失去视觉半径
+  bPerceptionEnabled: true,
+
+  // 血条偏移
+  HealthBarZOffset: 120,  // cm (换算后约为 18px)
+
+  // 移动目标
+  targetX: null,
+  targetY: null,
+};
+
+// ===== 渲染核心 =====
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let lastTime = 0;
+
+function px(cm) { return cm * SCALE; } // cm → 像素
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const n = npc;
+
+  // 1. 绘制失去视觉范围 (LoseSightRadius, 外层虚线)
+  ctx.beginPath();
+  ctx.arc(n.x, n.y, px(n.LoseSightRadius), 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(255,100,100,0.15)";
+  ctx.setLineDash([6, 12]);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 2. 绘制感知半径 (SightRadius)
+  ctx.beginPath();
+  ctx.arc(n.x, n.y, px(n.SightRadius), 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,80,80,0.08)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,80,80,0.4)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // 3. 绘制目标移动指示线
+  if (n.targetX !== null && n.targetY !== null && n.IsAlive) {
+    ctx.beginPath();
+    ctx.moveTo(n.x, n.y);
+    ctx.lineTo(n.targetX, n.targetY);
+    ctx.strokeStyle = "rgba(100,200,255,0.3)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 8]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 十字准星标记
+    const tx = n.targetX, ty = n.targetY;
+    ctx.strokeStyle = "#4fc3f7";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(tx - 8, ty); ctx.lineTo(tx + 8, ty); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(tx, ty - 8); ctx.lineTo(tx, ty + 8); ctx.stroke();
+  }
+
+  // 4. 绘制 NPC 本体
+  const size = 14;
+  const color = n.IsAlive ? "#7ec8e3" : "#555";
+  ctx.fillStyle = color;
+  ctx.fillRect(n.x - size, n.y - size, size * 2, size * 2);
+  ctx.strokeStyle = n.IsAlive ? "#fff" : "#444";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(n.x - size, n.y - size, size * 2, size * 2);
+
+  // NPC 标签
+  ctx.fillStyle = "#aaa";
+  ctx.font = "10px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("NPC", n.x, n.y + size + 16);
+  ctx.textAlign = "start";
+
+  // 5. 绘制血条
+  const hbOffset = px(n.HealthBarZOffset) / 8 + size + 4;
+  const barW = 60, barH = 6;
+  const barX = n.x - barW / 2, barY = n.y - hbOffset;
+
+  // 背景
+  ctx.fillStyle = "#333";
+  ctx.fillRect(barX, barY, barW, barH);
+
+  // 生命条
+  const hpRatio = Math.max(0, n.CurrentHP / n.MaxHP);
+  const hpColor = hpRatio > 0.5 ? "#4caf50" : hpRatio > 0.25 ? "#ff9800" : "#f44336";
+  ctx.fillStyle = hpColor;
+  ctx.fillRect(barX, barY, barW * hpRatio, barH);
+
+  // 边框
+  ctx.strokeStyle = "#888";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX, barY, barW, barH);
+
+  // HP 文字
+  ctx.fillStyle = "#fff";
+  ctx.font = "9px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(`${n.CurrentHP}/${n.MaxHP}`, n.x, barY - 3);
+  ctx.textAlign = "start";
+
+  // 6. 死亡状态标记
+  if (!n.IsAlive) {
+    ctx.fillStyle = "rgba(255,0,0,0.3)";
+    ctx.font = "bold 24px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("DEAD", n.x, n.y - 40);
+    ctx.textAlign = "start";
+  }
+
+  // 7. 图例
+  ctx.fillStyle = "#555";
+  ctx.font = "11px monospace";
+  ctx.fillText("Sight: " + n.SightRadius + "cm", 10, 20);
+  ctx.fillText("LoseSight: " + n.LoseSightRadius + "cm", 10, 36);
+}
+
+// ===== 游戏循环 =====
+function gameLoop(timestamp) {
+  if (!lastTime) lastTime = timestamp;
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.1); // 上限 100ms
+  lastTime = timestamp;
+
+  // 移动逻辑: 向目标点移动
+  const n = npc;
+  if (n.targetX !== null && n.targetY !== null && n.IsAlive) {
+    const dx = n.targetX - n.x;
+    const dy = n.targetY - n.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < 3) {
+      // 到达目标
+      n.targetX = null;
+      n.targetY = null;
+    } else {
+      // 按 WalkSpeed 移动 (cm/s → px/s)
+      const moveSpeed = px(n.WalkSpeed);
+      const step = moveSpeed * dt;
+      const ratio = step / dist;
+      n.x += dx * ratio;
+      n.y += dy * ratio;
+    }
+  }
+
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// ===== 交互: 点击移动 =====
+canvas.addEventListener("click", (e) => {
+  if (!npc.IsAlive) return;
+  const rect = canvas.getBoundingClientRect();
+  npc.targetX = e.clientX - rect.left;
+  npc.targetY = e.clientY - rect.top;
+});
+
+// ===== 伤害系统 =====
+function takeDamage(amount) {
+  if (!npc.IsAlive) return false;
+
+  // 扣减 CurrentHP, 不低于 0
+  npc.CurrentHP = Math.max(0, npc.CurrentHP - amount);
+
+  // 更新 IsAlive 标记
+  const wasAlive = npc.IsAlive;
+  npc.IsAlive = npc.CurrentHP > 0;
+
+  // OnDeath 事件触发 (HP 从 >0 变为 0)
+  if (wasAlive && !npc.IsAlive) {
+    npc.targetX = null;
+    npc.targetY = null;
+    console.log("[ANPCCharacter] OnDeath triggered — CurrentHP reached 0");
+  }
+
+  updateUI();
+  return true;
+}
+
+function dealDamage(amount) {
+  const oldHP = npc.CurrentHP;
+  takeDamage(amount);
+  if (oldHP !== npc.CurrentHP) {
+    console.log(`[TakeDamage] ${amount} → HP: ${oldHP} → ${npc.CurrentHP}, IsAlive: ${npc.IsAlive}`);
+  }
+}
+
+function resetNPC() {
+  npc.CurrentHP = npc.MaxHP;
+  npc.IsAlive = true;
+  npc.x = 400;
+  npc.y = 250;
+  npc.targetX = null;
+  npc.targetY = null;
+  console.log("[ANPCCharacter] Reset — HP restored to " + npc.MaxHP);
+  updateUI();
+}
+
+function updateUI() {
+  document.getElementById("chp").textContent = npc.CurrentHP;
+  document.getElementById("alive").textContent = npc.IsAlive;
+}
+
+// 键盘快捷键
+window.addEventListener("keydown", (e) => {
+  const keyMap = { "1": 10, "2": 25, "3": 50, "4": 100, "5": 999 };
+  if (keyMap[e.key]) dealDamage(keyMap[e.key]);
+  if (e.key === "r" || e.key === "R") resetNPC();
+});
+
+// 启动
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
